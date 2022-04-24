@@ -9,7 +9,7 @@ with RL.
 
 
 We base this script off of some code snippets found
-in the "Getting Started with Gym" section of the OpenAI 
+in the "Getting Started with Gym" section of the OpenAI
 gym documentation.
 
 The following snippet was used to demo basic functionality.
@@ -54,23 +54,6 @@ from robosuite.wrappers import GymWrapper
 from robosuite.wrappers import VisualizationWrapper
 
 
-def make_env(env, rank, seed=0):
-    """
-    Utility function for multiprocessed env.
-
-    :param env_id: (str) the environment ID
-    :param num_env: (int) the number of environments you wish to have in subprocesses
-    :param seed: (int) the inital seed for RNG
-    :param rank: (int) index of the subprocess
-    """
-    def _init():
-        # env = gym.make(env_id)
-        env.seed(seed + rank)
-        return env
-    set_random_seed(seed)
-    return _init
-
-
 class SaveOnBestTrainingRewardCallback(BaseCallback):
     """
     Callback for saving a model (the check is done every ``check_freq`` steps)
@@ -82,8 +65,8 @@ class SaveOnBestTrainingRewardCallback(BaseCallback):
     :param verbose: (int)
     """
 
-    def __init__(self, check_freq: int, log_dir: str, verbose=1):
-        super(SaveOnBestTrainingRewardCallback, self).__init__(verbose)
+    def _init_(self, check_freq: int, log_dir: str, verbose=1):
+        super(SaveOnBestTrainingRewardCallback, self)._init_(verbose)
         self.check_freq = check_freq
         self.log_dir = log_dir
         self.save_path = os.path.join(log_dir, 'medium_best_model_30_11_n5')
@@ -126,8 +109,8 @@ class PlottingCallback(BaseCallback):
     :param verbose: (int)
     """
 
-    def __init__(self, verbose=1):
-        super(PlottingCallback, self).__init__(verbose)
+    def _init_(self, verbose=1):
+        super(PlottingCallback, self)._init_(verbose)
         self._plot = None
 
     def _on_step(self) -> bool:
@@ -180,9 +163,8 @@ def evaluate(model: "base_class.BaseAlgorithm",
     """
     global _info, obs
     if isinstance(env, VecEnv):
-        assert env.num_envs == 1, "You must pass only one environment when using this function"\
+        assert env.num_envs == 1, "You must pass only one environment when using this function"
 
-    actions = []
     episode_rewards, episode_lengths = [], []
     episode_success = 0
     for i in range(n_eval_episodes):
@@ -194,7 +176,6 @@ def evaluate(model: "base_class.BaseAlgorithm",
         episode_length = 0
         while not done:
             action, state = model.predict(obs, state=state, deterministic=deterministic)
-            actions.append(action)
             obs, reward, done, _info = env.step(action)
             episode_reward += reward
             if callback is not None:
@@ -212,31 +193,27 @@ def evaluate(model: "base_class.BaseAlgorithm",
         assert mean_reward > reward_threshold, "Mean reward below threshold: " f"{mean_reward:.2f} < {reward_threshold:.2f}"
     if return_episode_rewards:
         return episode_rewards, episode_lengths
-    # a = np.array(actions)
-    # print(a.shape)
-    # np.savetxt('action_matrix.csv', a, delimiter=',')
-    # print('Saved CSV')
     return mean_reward, std_reward, episode_success
 
 
-def linear_schedule(initial_value: float) -> Callable[[float], float]:
+def make_robosuite_env(env_id, options, rank, seed=0):
     """
-    Linear learning rate schedule.
-
-    :param initial_value: Initial learning rate.
-    :return: schedule that computes
-      current learning rate depending on remaining progress
+    Utility function for multiprocessed env.
+    :param env_id: (str) the environment ID
+    :param options: additional arguments to pass to the specific env class initializer
+    :param seed: (int) the inital seed for RNG
+    :param rank: (int) index of the subprocess
     """
-    def func(progress_remaining: float) -> float:
-        """
-        Progress will decrease from 1 (beginning) to 0.
 
-        :param progress_remaining:
-        :return: current learning rate
-        """
-        return progress_remaining * initial_value
+    def _init():
+        env = GymWrapper(suite.make(env_id, **options))
+        env = Monitor(env)
+        # Important: use a different seed for each environment
+        env.seed(seed + rank)
+        return env
 
-    return func
+    set_random_seed(seed)
+    return _init
 
 
 if __name__ == "__main__":
@@ -244,50 +221,32 @@ if __name__ == "__main__":
     log_dir = "robosuite/best_models/"
     os.makedirs(log_dir, exist_ok=True)
 
-    # Load the desired controller's default config as a dict
-    # config = load_controllesshir_config(default_controller='OSC_POSE')
     control_param = dict(type='IMPEDANCE_POSE_Partial', input_max=1, input_min=-1,
                          output_max=[0.05, 0.05, 0.05, 0.5, 0.5, 0.5],
                          output_min=[-0.05, -0.05, -0.05, -0.5, -0.5, -0.5], kp=700, damping_ratio=np.sqrt(2),
                          impedance_mode='fixed', kp_limits=[0, 100000], damping_ratio_limits=[0, 10],
                          position_limits=None, orientation_limits=None, uncouple_pos_ori=True, control_delta=True,
-                         interpolation=None, ramp_ratio=0.2, control_dim=26, plotter=False, ori_method='rotation', show_params=False)
+                         interpolation=None, ramp_ratio=0.2, control_dim=26, plotter=False, ori_method='rotation',
+                         show_params=False)
 
-    # Notice how the environment is wrapped by the wrapper
-    env = GymWrapper(
-        suite.make(
-            "PegInHoleSmall",
-            robots="UR5e",  # use UR5e robot
-            use_camera_obs=False,  # do not use pixel observations
-            has_offscreen_renderer=False,  # not needed since not using pixel obs
-            has_renderer=False,  ##True  # make sure we can render to the screen
-            reward_shaping=True,  # use dense rewards
-            ignore_done=False,
-            horizon=500,
-            control_freq=20,  # control should happen fast enough so that simulation looks smooth
-            controller_configs=control_param,
-            r_reach_value=0.2,
-            tanh_value=20.0,
-            error_type='ring',
-            control_spec=26,
-            dist_error=0.0008
-        )
-    )
-    # env = DummyVecEnv([lambda: env_id])
-    # env.reset()
-    env = Monitor(env, log_dir, allow_early_resets=True)
-    # Create the callback: check every 200 steps
-    reward_callback = SaveOnBestTrainingRewardCallback(check_freq=200, log_dir=log_dir)
+    env_id = 'PegInHoleSmall'
+
+    env_options = dict(robots="UR5e", use_camera_obs=False, has_offscreen_renderer=False, has_renderer=False,
+                       reward_shaping=True, ignore_done=False, horizon=500, control_freq=20,
+                       controller_configs=control_param, r_reach_value=0.2, tanh_value=20.0, error_type='ring',
+                       control_spec=26, dist_error=0.0008)
+    n_steps = 10
+    seed_val = 1996
+    num_proc = 10
+
+    env = SubprocVecEnv([make_robosuite_env(env_id, env_options, i, seed_val) for i in range(num_proc)])
 
     policy_kwargs = dict(activation_fn=torch.nn.LeakyReLU, net_arch=[32, 32])
-    model = PPO('MlpPolicy', env, verbose=1, policy_kwargs=policy_kwargs, tensorboard_log="./learning_log/ppo_tensorboard/",
-                n_steps=10, seed=4)  # ,batch_size=3, n_steps=500*10
+    model = PPO('MlpPolicy', env, verbose=1, policy_kwargs=policy_kwargs, n_steps=int(n_steps/num_proc),
+                tensorboard_log="./learning_log/ppo_tensorboard/")
 
-    # model = PPO.load("Daniel_n5_banchmark_single", verbose=1)
-    # model.set_env(env)
-    model.learn(total_timesteps=10000, tb_log_name="learning", callback=reward_callback)#, eval_env=evaluate(model, env, n_eval_episod         es=10))
+    model.learn(total_timesteps=10000, tb_log_name="learning")
     print("Done")
-    model.save('Daniel_n5_banchmark_single_rob')
+    model.save('Daniel_n5_banchmark_multi_rob2')
 
-    mean_reward, std_reward, episode_success = evaluate(model, env, n_eval_episodes=50, render=False)
-    print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f} \nsuccess rate: {episode_success / 50 * 100:.1f}")
+
