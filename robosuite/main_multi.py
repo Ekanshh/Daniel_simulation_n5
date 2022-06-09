@@ -38,20 +38,37 @@ import matplotlib.pyplot as plt
 import time
 from stable_baselines3.common import base_class
 from stable_baselines3.common.vec_env import VecEnv
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3 import PPO, TD3
 from stable_baselines3.ppo import MlpPolicy
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.results_plotter import load_results, ts2xy
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback, CheckpointCallback
 
 import torch
 import robosuite as suite
 from robosuite.wrappers import GymWrapper
 
 from robosuite.wrappers import VisualizationWrapper
+
+
+def make_env(env, rank, seed=0):
+    """
+    Utility function for multiprocessed env.
+
+    :param env_id: (str) the environment ID
+    :param num_env: (int) the number of environments you wish to have in subprocesses
+    :param seed: (int) the inital seed for RNG
+    :param rank: (int) index of the subprocess
+    """
+    def _init():
+        # env = gym.make(env_id)
+        env.seed(seed + rank)
+        return env
+    set_random_seed(seed)
+    return _init
 
 
 class SaveOnBestTrainingRewardCallback(BaseCallback):
@@ -65,8 +82,8 @@ class SaveOnBestTrainingRewardCallback(BaseCallback):
     :param verbose: (int)
     """
 
-    def _init_(self, check_freq: int, log_dir: str, verbose=1):
-        super(SaveOnBestTrainingRewardCallback, self)._init_(verbose)
+    def __init__(self, check_freq: int, log_dir: str, verbose=1):
+        super(SaveOnBestTrainingRewardCallback, self).__init__(verbose)
         self.check_freq = check_freq
         self.log_dir = log_dir
         self.save_path = os.path.join(log_dir, 'medium_best_model_30_11_n5')
@@ -109,8 +126,8 @@ class PlottingCallback(BaseCallback):
     :param verbose: (int)
     """
 
-    def _init_(self, verbose=1):
-        super(PlottingCallback, self)._init_(verbose)
+    def __init__(self, verbose=1):
+        super(PlottingCallback, self).__init__(verbose)
         self._plot = None
 
     def _on_step(self) -> bool:
@@ -163,8 +180,9 @@ def evaluate(model: "base_class.BaseAlgorithm",
     """
     global _info, obs
     if isinstance(env, VecEnv):
-        assert env.num_envs == 1, "You must pass only one environment when using this function"
+        assert env.num_envs == 1, "You must pass only one environment when using this function"\
 
+    actions = []
     episode_rewards, episode_lengths = [], []
     episode_success = 0
     for i in range(n_eval_episodes):
@@ -176,6 +194,7 @@ def evaluate(model: "base_class.BaseAlgorithm",
         episode_length = 0
         while not done:
             action, state = model.predict(obs, state=state, deterministic=deterministic)
+            actions.append(action)
             obs, reward, done, _info = env.step(action)
             episode_reward += reward
             if callback is not None:
@@ -193,7 +212,32 @@ def evaluate(model: "base_class.BaseAlgorithm",
         assert mean_reward > reward_threshold, "Mean reward below threshold: " f"{mean_reward:.2f} < {reward_threshold:.2f}"
     if return_episode_rewards:
         return episode_rewards, episode_lengths
+    # a = np.array(actions)
+    # print(a.shape)
+    # np.savetxt('action_matrix.csv', a, delimiter=',')
+    # print('Saved CSV')
     return mean_reward, std_reward, episode_success
+
+
+def linear_schedule(initial_value: float) -> Callable[[float], float]:
+    """
+    Linear learning rate schedule.
+
+    :param initial_value: Initial learning rate.
+    :return: schedule that computes
+      current learning rate depending on remaining progress
+    """
+    def func(progress_remaining: float) -> float:
+        """
+        Progress will decrease from 1 (beginning) to 0.
+
+        :param progress_remaining:
+        :return: current learning rate
+        """
+        return progress_remaining * initial_value
+
+    return func
+
 
 
 def make_robosuite_env(env_id, options, rank, seed=0):
@@ -235,18 +279,36 @@ if __name__ == "__main__":
                        reward_shaping=True, ignore_done=False, horizon=500, control_freq=20,
                        controller_configs=control_param, r_reach_value=0.2, tanh_value=20.0, error_type='ring',
                        control_spec=26, dist_error=0.0008)
-    n_steps = 10
-    seed_val = 1996
+    n_steps = 20
+    seed_val = 4
     num_proc = 10
-
+    #
     env = SubprocVecEnv([make_robosuite_env(env_id, env_options, i, seed_val) for i in range(num_proc)])
+    # eval_callback = CheckpointCallback(save_freq=1, save_path='./checkpoints/',
+    #                             name_prefix=log_dir, verbose=2)
+    # eval_callback = EvalCallback(env,
+    #                              best_model_save_path=log_dir,
+    #                              log_path=log_dir,
+    #                              eval_freq=2,
+    #                              deterministic=False,
+    #                              render=False)
+
+    # checkpoint_callback = CheckpointCallback(save_freq=2, save_path=log_dir,
+    #                                          name_prefix='rl_model')
+    reward_callback = SaveOnBestTrainingRewardCallback(check_freq=2, log_dir=log_dir)
+    # env = VecNormalize(env)
+
+    # The number of environments must be identical when changing environments
+    # model = PPO.load('Daniel_2_n_step50_no_seed_n_proc10.zip',tensorboard_log="./learning_log/ppo_tensorboard/")
+    # # change env
+    # model.set_env(env)
 
     policy_kwargs = dict(activation_fn=torch.nn.LeakyReLU, net_arch=[32, 32])
     model = PPO('MlpPolicy', env, verbose=1, policy_kwargs=policy_kwargs, n_steps=int(n_steps/num_proc),
-                tensorboard_log="./learning_log/ppo_tensorboard/")
+                tensorboard_log="./learning_log/ppo_tensorboard/", seed=4)
 
-    model.learn(total_timesteps=10000, tb_log_name="learning")
+    model.learn(total_timesteps=5_000, tb_log_name="learning", callback=reward_callback, reset_num_timesteps=True)
     print("Done")
-    model.save('Daniel_n5_banchmark_multi_rob2')
+    model.save('test')
 
 

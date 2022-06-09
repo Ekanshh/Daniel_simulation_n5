@@ -278,16 +278,16 @@ if __name__ == "__main__":
     env = Monitor(env, log_dir, allow_early_resets=True)
     # Create the callback: check every 200 steps
     reward_callback = SaveOnBestTrainingRewardCallback(check_freq=200, log_dir=log_dir)
+    #
+    # policy_kwargs = dict(activation_fn=torch.nn.LeakyReLU, net_arch=[32, 32])
+    # model = PPO('MlpPolicy', env, verbose=1, policy_kwargs=policy_kwargs, tensorboard_log="./learning_log/ppo_tensorboard/",
+    #             n_steps=10, seed=48)  # ,batch_size=3, n_steps=500*10
 
-    policy_kwargs = dict(activation_fn=torch.nn.LeakyReLU, net_arch=[32, 32])
-    model = PPO('MlpPolicy', env, verbose=1, policy_kwargs=policy_kwargs, tensorboard_log="./learning_log/ppo_tensorboard/",
-                n_steps=10, seed=4)  # ,batch_size=3, n_steps=500*10
-
-    # model = PPO.load("Daniel_n5_banchmark_single", verbose=1)
-    # model.set_env(env)
-    model.learn(total_timesteps=10000, tb_log_name="learning", callback=reward_callback)#, eval_env=evaluate(model, env, n_eval_episod         es=10))
-    print("Done")
-    model.save('Daniel_n5_banchmark_single_rob')
+    model = PPO.load("./daniel_sim_results_robot/original_single_1_seed24/single_1_seed24.zip", verbose=1)
+    model.set_env(env)
+    # model.learn(total_timesteps=15000, tb_log_name="learning", callback=reward_callback)#, eval_env=evaluate(model, env, n_eval_episod         es=10))
+    # print("Done")
+    # model.save('single_2_seed48')
 
     mean_reward, std_reward, episode_success = evaluate(model, env, n_eval_episodes=50, render=False)
     print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f} \nsuccess rate: {episode_success / 50 * 100:.1f}")
